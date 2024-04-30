@@ -1,2 +1,5 @@
 # CS5220-Final
-Class Project for CS5220
+
+# Extract Synthetic Datasets
+
+tar -xvzf synthetic.tar.gz
