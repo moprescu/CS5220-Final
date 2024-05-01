@@ -106,12 +106,8 @@ void direct_lingam::residual_from_norm(vector<data_type> xi, vector<data_type> x
     for(int i = 0; i < xi.size(); i++){
         ri_j[i] = xi[i] - cov * xj[i];
         rj_i[i] = xj[i] - cov * xi[i];
-        //result.push_back(xi[i] - cov * xj[i]);
     }
-    //return result;
 }
-
-
 
 vector<data_type> direct_lingam::residual_base(vector<data_type> xi, vector<data_type> xj){
     vector<data_type> result;
@@ -137,6 +133,22 @@ data_type direct_lingam::entropy(vector<data_type> u){
     return (1 + log(2 * M_PI)) / 2 - k1 * pow(cal_1 - gamma, 2) - k2 * pow(cal_2, 2);
 }
 
+data_type direct_lingam::entropy_ij(vector<data_type> ui, vector<data_type> uj, data_type cov_ij){
+    data_type k1 = 79.047;
+    data_type k2 = 7.4129;
+    data_type gamma = 0.37457;
+    data_type cal_1 = 0;
+    data_type cal_2 = 0;
+    data_type norm_cov = pow(1-pow(cov_ij, 2), 0.5);
+    for (int i = 0; i < ui.size(); i++){
+        cal_1 += entropy_cal_1(0, (ui[i]-uj[i]*cov_ij)/norm_cov);
+        cal_2 += entropy_cal_2(0, (ui[i]-uj[i]*cov_ij)/norm_cov);
+    }
+    cal_1 /= data_type(ui.size());
+    cal_2 /= data_type(ui.size());
+    return (1 + log(2 * M_PI)) / 2 - k1 * pow(cal_1 - gamma, 2) - k2 * pow(cal_2, 2);
+}
+
 data_type direct_lingam::diff_mutual_info(vector<data_type> xi_std, vector<data_type> xj_std, 
                                             vector<data_type> ri_j, vector<data_type> rj_i){
 
@@ -155,20 +167,8 @@ data_type direct_lingam::diff_mutual_info(vector<data_type> xi_std, vector<data_
 }
 
 data_type direct_lingam::diff_mutual_info_X_entropy(data_type xi_entropy, data_type xj_entropy,
-                                            vector<data_type> ri_j, vector<data_type> rj_i){
-
-    data_type std_ri_j = pow(variance(ri_j), 0.5);
-    data_type std_rj_i = pow(variance(rj_i), 0.5);
-    if (base){
-        std_ri_j = 1.0;
-        std_rj_i = 1.0;
-    }
-    int _size = ri_j.size();
-    for(int i = 0; i < _size; i++){
-        ri_j[i] = ri_j[i] / std_ri_j;
-        rj_i[i] = rj_i[i] / std_rj_i;
-    }
-    return (xj_entropy + entropy(ri_j)) - (xi_entropy + entropy(rj_i));
+                                            vector<data_type> xi_std, vector<data_type> xj_std, data_type cov_ij){
+    return (xj_entropy + entropy_ij(xi_std, xj_std, cov_ij)) - (xi_entropy + entropy_ij(xj_std, xi_std, cov_ij));
 }
 
 
@@ -182,10 +182,8 @@ vector<vector<int>> direct_lingam::search_candidate(vector<int> U){
 
 int direct_lingam::search_causal_order(vector<vector<data_type>> &X, vector<int> U){
     vector<int> Uc;
-    vector<int> Vj;
     vector<vector<int>> candidates = search_candidate(U);
     Uc = candidates[0];
-    Vj = candidates[1];
 
     if(Uc.size() == 1){
         return Uc[0];
@@ -205,22 +203,8 @@ int direct_lingam::search_causal_order(vector<vector<data_type>> &X, vector<int>
             if (*i != *j){
                 xi_std = normalize(X[*i]);
                 xj_std = normalize(X[*j]);
-
-                if((std::find(Vj.begin(), Vj.end(), *i) != Vj.end()) && 
-                        (std::find(Uc.begin(), Uc.end(), *j) != Uc.end())){
-                    ri_j = xi_std;
-                }
-                else{
-                    ri_j = residual(xi_std, xj_std);
-                }
-                if((std::find(Vj.begin(), Vj.end(), *j) != Vj.end()) && 
-                        (std::find(Uc.begin(), Uc.end(), *i) != Uc.end())){
-                    rj_i = xj_std;
-                }
-                else{
-                    rj_i = residual(xj_std,  xi_std);
-                }
-
+                ri_j = residual(xi_std, xj_std);
+                rj_i = residual(xj_std,  xi_std);
                 M += pow(std::min(data_type(0), diff_mutual_info(xi_std, xj_std, ri_j, rj_i)), 2);
             }
         }
@@ -257,8 +241,10 @@ int direct_lingam::search_causal_order_opt(vector<vector<data_type>> &X, vector<
         data_type M = 0;
         for (auto j = U.begin(); j != U.end(); j++){
             if (*i != *j){
-                residual_from_norm(X_norm[*i], X_norm[*j], ri_j, rj_i);
-                M += pow(std::min(data_type(0), diff_mutual_info_X_entropy(X_entropy[*i], X_entropy[*j], ri_j, rj_i)), 2);
+                double cov_ij = covariance_norm(X_norm[*i], X_norm[*j]);
+                M += pow(std::min(data_type(0), diff_mutual_info_X_entropy(X_entropy[*i], X_entropy[*j], X_norm[*i], X_norm[*j], cov_ij)), 2);
+                //residual_from_norm(X_norm[*i], X_norm[*j], ri_j, rj_i);
+                //M += pow(std::min(data_type(0), diff_mutual_info_X_entropy(X_entropy[*i], X_entropy[*j], ri_j, rj_i)), 2);
             }
             if (M > running_minimum){
                 break;
@@ -268,9 +254,7 @@ int direct_lingam::search_causal_order_opt(vector<vector<data_type>> &X, vector<
             running_minimum = M;
             minimum_idx = *i;
         }
-        //M_list.push_back( -1.0 * M);
     }
-    //return Uc[std::max_element(M_list.begin(), M_list.end()) - M_list.begin()];
     return minimum_idx;
 }
 
@@ -321,6 +305,15 @@ data_type direct_lingam::covariance(vector<data_type> X, vector<data_type> Y){
         }
     }
     return result;
+}
+
+data_type covariance_norm(vector<data_type> X, vector<data_type> Y){
+    data_type cov = 0;
+    for(int i = 0; i < X.size(); i++){
+        cov += X[i] * Y[i];
+    }
+    cov /= (data_type)(X.size() - 1);
+    return cov;
 }
 
 

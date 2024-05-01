@@ -33,7 +33,7 @@ int main(int argc, char** argv){
 
     // Fit model
     auto start_time = std::chrono::steady_clock::now();
-    causal_order = model.fit(X);
+    causal_order = model.fit_opt(X);
     auto end_time = std::chrono::steady_clock::now();
     std::chrono::duration<double> diff = end_time - start_time;
     double seconds = diff.count();

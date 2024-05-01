@@ -213,14 +213,6 @@ __device__ double entropy_ij(double* ui, double* uj, double cov_ij, int samples)
 }
 
 __device__ double diff_mutual_info(double* xi_std, double* xj_std, double cov_ij, int samples){
-    /*
-    double std_ri_j = pow(1-pow(cov_ij, 2), 0.5);
-    double std_rj_i = pow(1-pow(cov_ij, 2), 0.5);
-    for(int i = 0; i < samples; i++){
-        ri_j[i] = ri_j[i] / std_ri_j;
-        rj_i[i] = rj_i[i] / std_rj_i;
-    }
-    */
     return (entropy(xj_std, samples) + entropy_ij(xi_std, xj_std, cov_ij, samples)) - (entropy(xi_std, samples) + entropy_ij(xj_std, xi_std, cov_ij, samples));
 }
 
