@@ -33,22 +33,42 @@ vector<int> gpu_lingam::fit(double* d_X, int n, int m){
         cudaMemset(d_M_list, 0, dims * sizeof(double));
         // Call GPU kernels, all computations are done on the GPU
         // GPU kernel: search for the root node, add to causal order and remove from u
-        blks = (pow((dims - dim), 2) + NUM_THREADS - 1) / NUM_THREADS;
-        normalize_data<<<1, NUM_THREADS>>>(d_X, d_X_norm, samples, dims);
+        blks = (dims + NUM_THREADS - 1) / NUM_THREADS;
+        normalize_data<<<blks, NUM_THREADS>>>(d_X, d_X_norm, samples, dims);
         cudaDeviceSynchronize();
 
-        if (dims-dim > 200){
+        /*
+        // Initial GPU implementation
+        blks = (pow((dims - dim), 2) + NUM_THREADS - 1) / NUM_THREADS;
+        compute_M<<<blks, NUM_THREADS>>>(d_X_norm, d_M_list, d_U, dims, samples, dim);
+        cudaDeviceSynchronize();
+        */
+
+        /*
+        // Parallel reduction
+        int pr_NUM_THREADS = 128;
+        int pr_blks = (pow((dims - dim), 2) + 1) / 2;
+        size_t sharedSize = (2*pr_NUM_THREADS + 14) * sizeof(double);
+        block_compute_M<<<pr_blks, pr_NUM_THREADS, sharedSize>>>(d_X_norm, d_M_list, d_U, dims, samples, dim, pr_NUM_THREADS/2);
+        cudaDeviceSynchronize();
+        */
+
+
+        // Hybrid implementation
+        if (dims-dim > 500){
+            blks = (pow((dims - dim), 2) + NUM_THREADS - 1) / NUM_THREADS;
             compute_M<<<blks, NUM_THREADS>>>(d_X_norm, d_M_list, d_U, dims, samples, dim);
             cudaDeviceSynchronize();
         }
         else{
             // Parallel reduction
-            int pr_NUM_THREADS = 256;
+            int pr_NUM_THREADS = 128;
             int pr_blks = (pow((dims - dim), 2) + 1) / 2;
             size_t sharedSize = (2*pr_NUM_THREADS + 14) * sizeof(double);
             block_compute_M<<<pr_blks, pr_NUM_THREADS, sharedSize>>>(d_X_norm, d_M_list, d_U, dims, samples, dim, pr_NUM_THREADS/2);
             cudaDeviceSynchronize();
         }
+
         
         update_order<<<1, 1>>>(d_U, d_causal_order, d_M_list, dims, dim);
         cudaDeviceSynchronize(); 
@@ -58,8 +78,8 @@ vector<int> gpu_lingam::fit(double* d_X, int n, int m){
             printf("CUDA error: %s\n", cudaGetErrorString(error));
         }
         // GPU kernel: residualize data
-        // TODO: Make this work for arbitrary many columns
-        residualize_data<<<dims, NUM_THREADS>>>(d_X, d_causal_order, dims, samples, dim);
+        blks = (dims + NUM_THREADS - 1) / NUM_THREADS;
+        residualize_data<<<blks, NUM_THREADS>>>(d_X, d_causal_order, dims, samples, dim);
         cudaDeviceSynchronize();
     }
     cudaMemcpy(causal_order.data(), d_causal_order, dims * sizeof(int), cudaMemcpyDeviceToHost);
