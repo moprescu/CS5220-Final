@@ -224,7 +224,7 @@ int direct_lingam::search_causal_order_opt(vector<vector<data_type>> &X, vector<
 
     vector<vector<data_type>> X_norm(X.size());
     vector<data_type> X_entropy(X.size());
-    vector<data_type> M_list;
+    vector<data_type> M_list(Uc.size(), 0);
     vector<data_type> xi_std;
     vector<data_type> xj_std;
     vector<data_type> ri_j(X[0].size()), rj_i(X[0].size());
@@ -237,22 +237,26 @@ int direct_lingam::search_causal_order_opt(vector<vector<data_type>> &X, vector<
         X_entropy[i] = entropy(X_norm[i]);
     }
 
-    for(auto i = Uc.begin(); i != Uc.end(); i++){
-        data_type M = 0;
-        for (auto j = U.begin(); j != U.end(); j++){
-            if (*i != *j){
-                double cov_ij = covariance_norm(X_norm[*i], X_norm[*j]);
-                M += pow(std::min(data_type(0), diff_mutual_info_X_entropy(X_entropy[*i], X_entropy[*j], X_norm[*i], X_norm[*j], cov_ij)), 2);
+    for(auto i = 0; i < Uc.size(); i++){
+        //data_type M = M_list[*i];
+        int U_i = Uc[i];
+        for (auto j = i + 1; j < U.size(); j++){
+            if (i != j){
+                int U_j = Uc[j];
+                double cov_ij = covariance_norm(X_norm[U_i], X_norm[U_j]);
+                double diff_mi = diff_mutual_info_X_entropy(X_entropy[U_i], X_entropy[U_j], X_norm[U_i], X_norm[U_j], cov_ij);
+                M_list[i] += pow(std::min(data_type(0), diff_mi), 2);
                 //residual_from_norm(X_norm[*i], X_norm[*j], ri_j, rj_i);
                 //M += pow(std::min(data_type(0), diff_mutual_info_X_entropy(X_entropy[*i], X_entropy[*j], ri_j, rj_i)), 2);
+                M_list[j] += pow(std::min(data_type(0), -diff_mi), 2);
             }
-            if (M > running_minimum){
+            if (M_list[i] > running_minimum){
                 break;
             }
         }
-        if (M < running_minimum){
-            running_minimum = M;
-            minimum_idx = *i;
+        if (M_list[i] < running_minimum){
+            running_minimum = M_list[i];
+            minimum_idx = U_i;
         }
     }
     return minimum_idx;

@@ -11,7 +11,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
-#define NUM_THREADS 1024
+#define NUM_THREADS 512
 
 using namespace std;
 
