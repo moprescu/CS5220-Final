@@ -32,6 +32,7 @@ public:
 
 __global__ void normalize_data(double* d_X, double* d_X_norm, int samples, int dims);
 __global__ void compute_M(double* d_X_norm, double* d_M_list, int* d_U, int dims, int samples, int iter);
+__global__ void block_compute_M(double* d_X_norm, double* d_M_list, int* d_U, int dims, int samples, int iter, int num_threads);
 __global__ void update_order(int* d_U, int* d_causal_order, double* d_M_list, int dims, int iter);
 __global__ void residualize_data(double* d_X, int* d_causal_order, int dims, int samples, int iter);
 __device__ int max_index(double* array, int size);

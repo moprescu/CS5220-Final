@@ -38,8 +38,17 @@ vector<int> gpu_lingam::fit(double* d_X, int n, int m){
         normalize_data<<<1, NUM_THREADS>>>(d_X, d_X_norm, samples, dims);
         cudaDeviceSynchronize();
 
+        /*
         compute_M<<<blks, NUM_THREADS>>>(d_X_norm, d_M_list, d_U, dims, samples, dim);
-        cudaDeviceSynchronize(); 
+        cudaDeviceSynchronize();
+        */
+        
+        int num_th = 128;
+        blks = pow((dims - dim), 2);
+        size_t sharedSize = (8 * num_th + 1) * sizeof(double);
+        block_compute_M<<<blks, num_th, sharedSize>>>(d_X_norm, d_M_list, d_U, dims, samples, dim, num_th);
+        cudaDeviceSynchronize();
+        blks = (pow((dims - dim), 2) + NUM_THREADS - 1) / NUM_THREADS;
 
         update_order<<<1, 1>>>(d_U, d_causal_order, d_M_list, dims, dim);
         cudaDeviceSynchronize(); 
@@ -85,6 +94,105 @@ __global__ void compute_M(double* d_X_norm, double* d_M_list, int* d_U, int dims
             double cov_ij = covariance_norm(d_X_norm + i * samples, d_X_norm + j * samples, samples);
             double M = -1.0 * pow(min(double(0), diff_mutual_info(d_X_norm + i * samples, d_X_norm + j * samples, cov_ij, samples)), 2);
             atomicAdd(&d_M_list[tid / (dims-iter)], M);
+        }
+    }
+}
+
+__global__ void block_compute_M(double* d_X_norm, double* d_M_list, int* d_U, int dims, int samples, int iter, int num_threads){
+    extern __shared__ double sharedMem[]; // Data for loading the columns to be worked on & intermediate calculations
+    double* cov = sharedMem;
+    double* calc1 = sharedMem + 1;
+    double* calc2 = sharedMem + num_threads + 1;
+    double* calc3 = sharedMem + 2*num_threads + 1;
+    double* calc4 = sharedMem + 3*num_threads + 1;
+    double* calc5 = sharedMem + 4*num_threads + 1;
+    double* calc6 = sharedMem + 5*num_threads + 1;
+    double* calc7 = sharedMem + 6*num_threads + 1;
+    double* calc8 = sharedMem + 7*num_threads + 1;
+    //int stride = (samples + num_threads - 1) / num_threads;
+    int tid = threadIdx.x;
+    int bid = blockIdx.x;
+    int i = d_U[bid / (dims-iter)];
+    int j = d_U[bid % (dims-iter)];
+    double* col_i = d_X_norm + i * samples;
+    double* col_j = d_X_norm + j * samples;
+    if (i !=  j){
+        // Load data collaboratively and calulate covariance
+        calc1[tid] = 0.0;
+        for(int k = tid; k < samples; k+=num_threads){
+            if (k < samples){
+
+                calc1[tid] += col_i[k] * col_j[k];
+            }
+        }
+        __syncthreads(); // Ensure data is loaded and cov entries are calculated
+        // Calculate covariance
+        if (tid == 0){
+            cov[0] = 0.0;
+            for(int k = 0; k < num_threads; k++){
+                cov[0] += calc1[k];
+            }
+            cov[0] /= (double)(samples - 1);
+        }
+        __syncthreads(); // Covariance is calculated
+        // Calculate entropy entries
+        // Initialize entropy entries
+        calc1[tid] = 0.0; // j entropy cal_1
+        calc2[tid] = 0.0; // j entropy cal_2
+        calc3[tid] = 0.0; // ij entropy cal_1
+        calc4[tid] = 0.0; // ij entropy cal_2
+        calc5[tid] = 0.0; // ji entropy cal_1
+        calc6[tid] = 0.0; // ji entropy cal_2
+        calc7[tid] = 0.0; // i entropy cal_1
+        calc8[tid] = 0.0; // i entropy cal_2
+        double norm_cov = pow(1-pow(cov[0], 2), 0.5);
+        for(int k = tid; k < samples; k+=num_threads){
+            if (k < samples){
+                calc1[tid] += entropy_cal_1(col_j[k]);
+                calc2[tid] += entropy_cal_2(col_j[k]);
+                calc3[tid] += entropy_cal_1((col_i[k]-col_j[k]*cov[0])/norm_cov);
+                calc4[tid] += entropy_cal_2((col_i[k]-col_j[k]*cov[0])/norm_cov);
+                calc5[tid] += entropy_cal_1((col_j[k]-col_i[k]*cov[0])/norm_cov);
+                calc6[tid] += entropy_cal_2((col_j[k]-col_i[k]*cov[0])/norm_cov);
+                calc7[tid] += entropy_cal_1(col_i[k]);
+                calc8[tid] += entropy_cal_2(col_i[k]);
+            }
+        }
+        __syncthreads(); // Entropy elements are calculated
+        double k1 = 79.047;
+        double k2 = 7.4129;
+        double gamma = 0.37457;
+        if (tid==0){
+            // Coalesce calcs and calculate:
+            //(1 + log(2 * M_PI)) / 2 - k1 * pow(cal_1 - gamma, 2) - k2 * pow(cal_2, 2);
+            for(int k = 1; k < num_threads; k++){
+                calc1[0] += calc1[k];
+                calc2[0] += calc2[k];
+                calc3[0] += calc3[k];
+                calc4[0] += calc4[k];
+                calc5[0] += calc5[k];
+                calc6[0] += calc6[k];
+                calc7[0] += calc7[k];
+                calc8[0] += calc8[k];
+            }
+            calc1[0] /= double(samples);
+            calc2[0] /= double(samples);
+            calc3[0] /= double(samples);
+            calc4[0] /= double(samples);
+            calc5[0] /= double(samples);
+            calc6[0] /= double(samples);
+            calc7[0] /= double(samples);
+            calc8[0] /= double(samples);
+            // Calculate entropies
+            calc1[0] = (1 + log(2 * M_PI)) / 2 - k1 * pow(calc1[0] - gamma, 2) - k2 * pow(calc2[0], 2);
+            calc1[1] = (1 + log(2 * M_PI)) / 2 - k1 * pow(calc3[0] - gamma, 2) - k2 * pow(calc4[0], 2);
+            calc1[2] = (1 + log(2 * M_PI)) / 2 - k1 * pow(calc5[0] - gamma, 2) - k2 * pow(calc6[0], 2);
+            calc1[3] = (1 + log(2 * M_PI)) / 2 - k1 * pow(calc7[0] - gamma, 2) - k2 * pow(calc8[0], 2);
+            // Calculate diff mutual info as:
+            //(entropy(xj_std, samples) + entropy_ij(xi_std, xj_std, cov_ij, samples)) - (entropy(xi_std, samples) + entropy_ij(xj_std, xi_std, cov_ij, samples));
+            //// Add to global M
+            double M = -1.0 * pow(min(double(0), calc1[0] + calc1[1] - calc1[2] - calc1[3]), 2);
+            atomicAdd(&d_M_list[bid / (dims-iter)], M);
         }
     }
 }
